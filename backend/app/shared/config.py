@@ -1,4 +1,18 @@
+import pathlib
 from pydantic_settings import BaseSettings
+
+
+def _find_env() -> str | None:
+    # Walk up from this file: backend/app/shared -> backend -> root -> parent
+    here = pathlib.Path(__file__).resolve()
+    for parent in [here.parent, *here.parents]:
+        cand = parent / ".env"
+        if cand.is_file():
+            return str(cand)
+    return None
+
+
+_ENV_FILE = _find_env()
 
 
 class Settings(BaseSettings):
@@ -17,7 +31,7 @@ class Settings(BaseSettings):
     PUBMED_TOOL: str = "biomedeng-harness"
 
     class Config:
-        env_file = "../.env"
+        env_file = _ENV_FILE
         extra = "ignore"
 
 
