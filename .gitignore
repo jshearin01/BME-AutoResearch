@@ -11,3 +11,4 @@ data/*.log
 *.stl
 *.3mf
 *.gcode
+data/
