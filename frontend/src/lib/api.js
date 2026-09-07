@@ -17,6 +17,7 @@ export const sliceModel = (b) => api.post('/api/printing/slice', b).then(r => r.
 export const agentRun = (b) => api.post('/api/agent/run', b).then(r => r.data)
 export const fullRun = (b, opts) => api.post('/api/agent/full-run', b, { timeout: 300000, ...opts }).then(r => r.data)
 export const listRuns = (pid) => api.get('/api/runs', { params: { project_id: pid } }).then(r => r.data)
+export const getRun = (id) => api.get(`/api/runs/${id}`).then(r => r.data)
 export const kbQuery = (b) => api.post('/api/knowledge/query', b).then(r => r.data)
 export const kbIngest = (b) => api.post('/api/knowledge/ingest', b).then(r => r.data)
 export const kbSources = () => api.get('/api/knowledge/sources').then(r => r.data)

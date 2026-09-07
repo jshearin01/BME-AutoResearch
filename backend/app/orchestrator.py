@@ -76,21 +76,22 @@ async def full_run(body: FullRun, db: Session = Depends(get_db)):
         except Exception as e:
             steps["research_error"] = str(e)
     kb = retrieve(db, brief, 4)
-    synthesis = await generate(
-        f"Query: {brief[:500]}\nPapers: {str(papers)[:2500]}\nKnowledge: {kb[:1500]}\n"
-        "Summarize gaps, risks, 3 design implications with citations.")
-    steps["research"] = {"papers": len(papers), "synthesis": synthesis[:2000]}
+    research_prompt = (f"Query: {brief[:500]}\nPapers: {str(papers)[:2500]}\nKnowledge: {kb[:1500]}\n"
+                       "Summarize gaps, risks, 3 design implications with citations.")
+    synthesis = await generate(research_prompt)
+    steps["research"] = {"papers": papers, "paper_count": len(papers),
+                         "synthesis": synthesis, "prompt": research_prompt}
     p.stage = "evidence"
     db.commit()
     log_run(db, p.id, "orchestrator", "full-run.research", brief[:200], f"{len(papers)} papers", status="ok")
 
     # 2. Spec
-    spec_text = await generate(
-        f"PROJECT: {p.title}\nPROBLEM: {p.problem}\nUSERS: {p.users}\n"
-        f"CONSTRAINTS: {p.constraints}\nKNOWLEDGE:\n{kb[:2000]}\nEVIDENCE:\n{synthesis[:1500]}\n\n"
-        "Output: (1) 3 concepts scored on safety/printability/cost, "
-        "(2) chosen spec: dimensions, loads, materials, tolerances, cleaning, failure modes, "
-        "(3) open questions.")
+    spec_prompt = (f"PROJECT: {p.title}\nPROBLEM: {p.problem}\nUSERS: {p.users}\n"
+                   f"CONSTRAINTS: {p.constraints}\nKNOWLEDGE:\n{kb[:2000]}\nEVIDENCE:\n{synthesis[:1500]}\n\n"
+                   "Output: (1) 3 concepts scored on safety/printability/cost, "
+                   "(2) chosen spec: dimensions, loads, materials, tolerances, cleaning, failure modes, "
+                   "(3) open questions.")
+    spec_text = await generate(spec_prompt)
     spec = {"concepts_text": spec_text,
             "dimensions_mm": {"max_envelope": [100, 100, 60]},
             "material_candidates": ["PLA", "PETG"], "min_wall_mm": 2.0,
@@ -98,17 +99,18 @@ async def full_run(body: FullRun, db: Session = Depends(get_db)):
     p.spec_json = json.dumps(spec)
     p.stage = "design"
     db.commit()
-    steps["spec"] = spec_text[:2000]
+    steps["spec"] = spec_text
+    steps["spec_prompt"] = spec_prompt
     log_run(db, p.id, "orchestrator", "full-run.spec", p.title, spec_text[:500])
 
     # 3. Safety (report, don't block — user overrode gates)
     text = f"{p.title} {p.problem} {spec_text[:1500]}"
     flags = sorted({w for w in HIGH_RISK if w in text.lower()})
-    review = await generate(
-        f"Design text: {text[:2000]}\nFlags: {flags}\n"
-        "Output: risk class, biocompat/cleaning concerns, pre-print verifications, one-line disclaimer.")
+    safety_prompt = (f"Design text: {text[:2000]}\nFlags: {flags}\n"
+                     "Output: risk class, biocompat/cleaning concerns, pre-print verifications, one-line disclaimer.")
+    review = await generate(safety_prompt)
     steps["safety"] = {"verdict": "BLOCKED — review required" if flags else "PASS with disclaimer",
-                       "flags": flags, "review": review[:1500]}
+                       "flags": flags, "review": review, "prompt": safety_prompt}
     log_run(db, p.id, "orchestrator", "full-run.safety", text[:200],
             steps["safety"]["verdict"], status="ok" if not flags else "flagged")
 
@@ -127,7 +129,8 @@ async def full_run(body: FullRun, db: Session = Depends(get_db)):
         blocked = [x for x in validate_code(code) if x.startswith("blocked")]
         if blocked:
             last_err = "; ".join(blocked)
-            attempts.append({"try": i + 1, "ok": False, "error": last_err})
+            attempts.append({"try": i + 1, "ok": False, "error": last_err,
+                             "code": code, "prompt": prompt, "raw": raw})
             continue
         stamp = datetime.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
         py_path = CAD_DIR / f"{p.id}_full_{stamp}_t{i}.py"
@@ -135,7 +138,8 @@ async def full_run(body: FullRun, db: Session = Depends(get_db)):
         out_path = CAD_DIR / f"{p.id}_full_{stamp}_t{i}.stl"
         ok, note = try_build_stl(code, out_path)
         attempts.append({"try": i + 1, "ok": ok, "note": note,
-                         "stl_file": str(out_path) if ok else None})
+                         "stl_file": str(out_path) if ok else None,
+                         "code": code, "prompt": prompt, "raw": raw})
         if ok:
             stl_file = str(out_path)
             break

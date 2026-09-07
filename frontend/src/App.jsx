@@ -16,6 +16,46 @@ function Status({ value }) {
   return <span className={`status ${value}`}>{label}</span>
 }
 
+function Inspector({ data, onClose }) {
+  if (!data) return null
+  const copy = async (t) => { try { await navigator.clipboard.writeText(String(t)) } catch {} }
+  return (
+    <div className="overlay" onClick={onClose}>
+      <div className="inspector" onClick={e => e.stopPropagation()}>
+        <div className="row" style={{ justifyContent: 'space-between', marginBottom: 6 }}>
+          <h2 style={{ margin: 0 }}>{data.title}</h2>
+          <button className="btn small" onClick={onClose}>Close</button>
+        </div>
+        {data.papers && (
+          <div className="mt">
+            <div className="lbl2">Sources ({data.papers.length})</div>
+            {data.papers.length === 0 && <div className="empty">No papers returned.</div>}
+            {data.papers.map((p, i) => (
+              <div key={i} className="paper">
+                <div className="pt">{p.title || '(untitled)'}</div>
+                <div className="pm">
+                  {[p.source, p.id ? `pmid:${p.id}` : null, p.year, p.authors ? (Array.isArray(p.authors) ? p.authors.map(a => a.name || a).join(', ') : p.authors.join?.(', ')) : null, p.citations != null ? `${p.citations} cites` : null].filter(Boolean).join(' · ')}
+                </div>
+                {p.abstract && <div className="pa">{p.abstract}</div>}
+                {p.url && <a className="pl" href={p.url} target="_blank" rel="noreferrer">open paper</a>}
+              </div>
+            ))}
+          </div>
+        )}
+        {(data.sections || []).map((s, i) => (
+          <div key={i} className="mt">
+            <div className="row" style={{ justifyContent: 'space-between' }}>
+              <span className="lbl2">{s.label}</span>
+              <button className="btn small ghost btn" onClick={() => copy(s.text)}>Copy</button>
+            </div>
+            <pre className={`fulltext ${s.mono ? 'mono-block' : ''}`}>{String(s.text || '(empty)')}</pre>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 export default function App() {
   const [projects, setProjects] = useState([])
   const [active, setActive] = useState(null)
@@ -29,6 +69,7 @@ export default function App() {
   const [kbq, setKbq] = useState('')
   const [brief, setBrief] = useState('')
   const [provider, setProvider] = useState('…')
+  const [inspect, setInspect] = useState(null)
 
   const refresh = async () => {
     const p = await api.listProjects()
@@ -76,19 +117,27 @@ export default function App() {
     setBusy(false); setBusyStep(null)
   }
 
-  const fr = out.fullrun && !out.fullrun.error ? out.fullrun : null
-  const research = out.research || (fr && { papers: fr.research?.papers, synthesis: fr.research?.synthesis })
-  const spec = out.spec || (fr && fr.spec ? { raw: fr.spec } : null)
+  const openRun = async (id) => {
+    try {
+      const r = await api.getRun(id)
+      setInspect({ title: `${r.agent} / ${r.action} (#${r.id})`, sections: [
+        { label: 'Input (prompt / context sent)', text: r.input_summary },
+        { label: 'Output (full model response)', text: r.output_summary },
+      ] })
+    } catch (e) { setInspect({ title: 'Run detail', sections: [{ label: 'Error', text: String(e) }] }) }
+  }
+
+  const fr = out.fullrun && !out.fullrun.error && out.fullrun.stage ? out.fullrun : null
+  const research = out.research || (fr?.research ? { query: '', papers: fr.research.papers, paper_count: fr.research.paper_count, synthesis: fr.research.synthesis, prompt: fr.research.prompt } : null)
+  const specPrompt = out.spec?.prompt || fr?.spec_prompt || ''
+  const specRaw = out.spec?.raw || (typeof fr?.spec === 'string' ? fr.spec : fr?.spec?.concepts_text) || ''
   const safety = out.safety || (fr && fr.safety)
-  const codegen = out.codegen || (fr && fr.codegen ? { ...fr.codegen, stl_note: undefined } : null)
+  const codegen = out.codegen || (fr && fr.codegen ? { ...fr.codegen } : null)
+  const attempts = codegen?.attempts || []
   const packet = out.packet || (fr && fr.packet)
 
-  const stageIdx = STAGE_IDX[active?.stage] ?? 0
-  const stepState = (n) => {
-    const order = { research: 1, spec: 2, safety: 2, cad: 3, print: 4 }
-    if (busyStep === 'full') return stageIdx >= order[n] ? 'ok' : (n === 'research' ? 'busy' : 'idle')
-    return 'idle'
-  }
+  const paperList = Array.isArray(research?.papers) ? research.papers : []
+  const paperCount = research?.paper_count ?? (typeof research?.papers === 'number' ? research.papers : paperList.length)
 
   const stepper = useMemo(() => {
     const items = [
@@ -112,6 +161,7 @@ export default function App() {
 
   return (
     <>
+      <Inspector data={inspect} onClose={() => setInspect(null)} />
       <header className="hdr">
         <div className="mark">B</div>
         <div>
@@ -125,12 +175,11 @@ export default function App() {
 
       <div className="wrap">
         <div className="board">
-          {/* ------- projects ------- */}
           <aside className="card">
             <h3>Projects</h3>
             {projects.map(p => (
               <div key={p.id} className={`proj ${active?.id === p.id ? 'active' : ''}`}
-                onClick={() => { setActive(p); setOut({}); setStlPath(null); loadRuns(p.id); loadCad(p.id) }}>
+                onClick={() => { setActive(p); setOut({}); setInspect(null); setStlPath(null); loadRuns(p.id); loadCad(p.id) }}>
                 <div className="t">{p.title}</div>
                 <div className="m">{p.id}</div>
                 <span className={`pill ${p.stage}`}>{p.stage}</span>
@@ -167,7 +216,6 @@ export default function App() {
             </div>
           </aside>
 
-          {/* ------- workflow ------- */}
           <main className="card">
             {!active ? <div className="empty">Select a project to start the workflow.</div> : <>
               <div className="row" style={{ justifyContent: 'space-between' }}>
@@ -184,26 +232,38 @@ export default function App() {
                     <div className="grow"><div className="title">Evidence</div><div className="desc">PubMed + Semantic Scholar + local knowledge base</div></div>
                     <Status value={busyStep === 'research' || busyStep === 'full' ? 'busy' : research ? 'ok' : 'idle'} />
                     <button className="btn small" disabled={busy} onClick={() => runStep('research', () => api.research({ project_id: active.id, query: `${active.title} ${active.problem}` }), 'research')}>Run</button>
+                    {research && !research.error && <button className="btn small ghost btn" onClick={() => setInspect({
+                      title: 'Evidence — query, sources, synthesis',
+                      papers: paperList,
+                      sections: [
+                        { label: 'Search query', text: research.query || `${active.title} ${active.problem}` },
+                        { label: 'Prompt sent to model', text: research.prompt || '(prompt not recorded for this run — re-run to capture it)' },
+                        { label: 'Synthesis (full)', text: research.synthesis },
+                      ] })}>Inspect</button>}
                   </div>
                   {research && <div className="body">
                     {research.error ? <span style={{ color: 'var(--red)' }}>{research.error}</span> : <>
-                      <b>{research.papers ?? research.papers?.length ?? ''}</b>{typeof research.papers === 'number' ? ' papers found.' : ''}
+                      <b>{paperCount}</b> papers found{paperList.length > 0 && ` — ${excerpt(paperList[0].title, 80)}…`}
                       {research.synthesis && <div className="excerpt">{excerpt(research.synthesis)}</div>}
                     </>}
                   </div>}
                 </section>
 
-                <section className={`stepcard ${spec && !spec.error ? 'done' : ''}`}>
+                <section className={`stepcard ${specRaw ? 'done' : ''}`}>
                   <div className="head">
                     <div className="num">2</div>
                     <div className="grow"><div className="title">Design spec</div><div className="desc">3 concepts → chosen spec, dims, materials, failure modes</div></div>
-                    <Status value={busyStep === 'spec' ? 'busy' : spec ? 'ok' : 'idle'} />
+                    <Status value={busyStep === 'spec' ? 'busy' : specRaw ? 'ok' : 'idle'} />
                     <button className="btn small" disabled={busy} onClick={() => runStep('spec', () => api.makeSpec({ project_id: active.id }), 'spec')}>Run</button>
+                    {specRaw && <button className="btn small ghost btn" onClick={() => setInspect({
+                      title: 'Design spec — prompt + full output',
+                      sections: [
+                        { label: 'Prompt sent to model', text: specPrompt || '(prompt not recorded for this run — re-run to capture it)' },
+                        { label: 'Spec (full)', text: specRaw },
+                      ] })}>Inspect</button>}
                   </div>
-                  {spec && <div className="body">
-                    {spec.error ? <span style={{ color: 'var(--red)' }}>{spec.error}</span> :
-                      <div className="excerpt">{excerpt(spec.raw || spec.concepts_text || JSON.stringify(spec))}</div>}
-                  </div>}
+                  {specRaw ? <div className="body"><div className="excerpt">{excerpt(specRaw)}</div></div>
+                    : (out.spec?.error ? <div className="body"><span style={{ color: 'var(--red)' }}>{out.spec.error}</span></div> : null)}
                 </section>
 
                 <section className={`stepcard ${safety && !safety.error ? 'done' : ''}`}>
@@ -212,6 +272,12 @@ export default function App() {
                     <div className="grow"><div className="title">Safety review</div><div className="desc">Risk flags + biocompat gate before any CAD</div></div>
                     <Status value={busyStep === 'safety' ? 'busy' : safetyBlocked ? 'bad' : safety ? 'ok' : 'idle'} />
                     <button className="btn small" disabled={busy} onClick={() => runStep('safety', () => api.safetyCheck({ project_id: active.id, title: active.title, problem: active.problem, spec: active.spec_json }), 'safety')}>Run</button>
+                    {safety && !safety.error && <button className="btn small ghost btn" onClick={() => setInspect({
+                      title: 'Safety review — prompt + full output',
+                      sections: [
+                        { label: 'Prompt sent to model', text: safety.prompt || '(prompt not recorded — re-run to capture it)' },
+                        { label: 'Review (full)', text: `Verdict: ${safety.verdict}\nFlags: ${(safety.flags || []).join(', ') || 'none'}\n\n${safety.review}` },
+                      ] })}>Inspect</button>}
                   </div>
                   {safety && !safety.error && <div className="body">
                     <span className={`verdict ${safetyBlocked ? 'block' : 'pass'}`}>{safety.verdict}</span>
@@ -231,13 +297,24 @@ export default function App() {
                   </div>
                   <div className="body">
                     <input className="input" placeholder="Optional brief override — else uses project spec" value={brief} onChange={e => setBrief(e.target.value)} />
-                    {(codegen?.attempts || fr?.codegen?.attempts) && (
+                    {attempts.length > 0 && (
                       <div className="mt" style={{ fontSize: 12 }}>
-                        {(codegen?.attempts || fr.codegen.attempts).map(a => (
-                          <div key={a.try}>try {a.try}: {a.ok ? <b style={{ color: 'var(--green)' }}>STL built</b> : <span style={{ color: 'var(--amber)' }}>{excerpt(a.note || a.error, 140)}</span>}</div>
+                        {attempts.map(a => (
+                          <div key={a.try} className="row" style={{ justifyContent: 'space-between', padding: '3px 0' }}>
+                            <span>try {a.try}: {a.ok ? <b style={{ color: 'var(--green)' }}>STL built</b> : <span style={{ color: 'var(--amber)' }}>{excerpt(a.note || a.error, 120)}</span>}</span>
+                            <button className="btn small ghost btn" onClick={() => setInspect({
+                              title: `Codegen try ${a.try} — prompt, code, result`,
+                              sections: [
+                                { label: 'Prompt sent to model', text: a.prompt || '(prompt not recorded — re-run to capture it)' },
+                                { label: 'Generated code', text: a.code || '(none)', mono: true },
+                                { label: 'Build result', text: a.note || a.error || '' },
+                                ...(a.raw && a.raw !== a.code ? [{ label: 'Raw model reply', text: a.raw }] : []),
+                              ] })}>Inspect</button>
+                          </div>
                         ))}
                       </div>
                     )}
+                    {codegen?.system && <button className="btn small ghost btn mt" onClick={() => setInspect({ title: 'CAD system prompt', sections: [{ label: 'System prompt (all tries)', text: codegen.system }] })}>System prompt</button>}
                     {codegen?.error && <span style={{ color: 'var(--red)' }}>{codegen.error}</span>}
                   </div>
                 </section>
@@ -282,15 +359,14 @@ export default function App() {
             </>}
           </main>
 
-          {/* ------- traces ------- */}
           <aside className="card rail">
-            <h3>Agent trace</h3>
+            <h3>Agent trace — click any event for full detail</h3>
             <div className="row mt"><button className="btn small ghost btn" onClick={() => active && loadRuns(active.id)}>Refresh</button>
               <span style={{ fontSize: 11, color: 'var(--faint)' }}>{runs.length} events</span></div>
             <div className="mt">
               {runs.length === 0 && <div className="empty">Every agent step lands here.</div>}
               {runs.map(r => (
-                <div key={r.id} className={`trace ${r.status !== 'ok' ? 'warn' : ''}`}>
+                <div key={r.id} className={`trace clickable ${r.status !== 'ok' ? 'warn' : ''}`} onClick={() => openRun(r.id)}>
                   <span className="a">{r.agent}/{r.action}</span><span className={`s ${r.status}`}>{r.status}</span>
                   <div className="o">{excerpt(r.output_summary, 200)}</div>
                 </div>

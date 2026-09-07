@@ -10,8 +10,8 @@ def log_run(db: Session, project_id: str | None, agent: str, action: str, input_
         project_id=project_id or "global",
         agent=agent,
         action=action,
-        input_summary=input_summary[:2000],
-        output_summary=output_summary[:4000],
+        input_summary=input_summary[:8000],
+        output_summary=output_summary[:16000],
         status=status,
         created_at=datetime.datetime.utcnow(),
     )

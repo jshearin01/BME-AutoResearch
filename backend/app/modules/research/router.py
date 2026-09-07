@@ -58,9 +58,8 @@ async def search(body: dict, db: Session = Depends(get_db)):
         papers += await semanticscholar_search(query)
     except Exception as e:
         errors.append(f"semanticscholar: {e}")
-    summary = await generate(
-        f"Query: {query}\nPapers: {str(papers)[:3000]}\n"
-        "Summarize: gaps, risks, 3 design implications. Cite sources by title."
-    )
-    log_run(db, project_id, "researcher", "research.search", query, f"{len(papers)} papers. {summary[:500]}")
-    return {"query": query, "papers": papers, "synthesis": summary, "errors": errors}
+    prompt = (f"Query: {query}\nPapers: {str(papers)[:3000]}\n"
+              "Summarize: gaps, risks, 3 design implications. Cite sources by title.")
+    summary = await generate(prompt)
+    log_run(db, project_id, "researcher", "research.search", f"{query} || {prompt[:1500]}", f"{len(papers)} papers. {summary[:2000]}")
+    return {"query": query, "papers": papers, "synthesis": summary, "prompt": prompt, "errors": errors}

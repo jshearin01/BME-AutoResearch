@@ -193,7 +193,8 @@ async def codegen(body: dict, db: Session = Depends(get_db)):
         blocked = [x for x in issues if x.startswith("blocked")]
         if blocked:
             last_err = "; ".join(blocked)
-            attempts.append({"try": i + 1, "ok": False, "error": last_err, "code": code[:2000]})
+            attempts.append({"try": i + 1, "ok": False, "error": last_err,
+                             "code": code, "prompt": prompt, "raw": raw})
             continue
         stamp = datetime.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
         py_path = CAD_DIR / f"{pid}_gen_{stamp}_t{i}.py"
@@ -203,15 +204,17 @@ async def codegen(body: dict, db: Session = Depends(get_db)):
         attempts.append({"try": i + 1, "ok": ok, "note": note,
                          "py_file": str(py_path),
                          "stl_file": str(stl_path) if ok else None,
-                         "code": code[:3000]})
-        log_run(db, pid, "cad-builder", f"codegen.t{i + 1}", brief[:300], note[:500],
+                         "code": code, "prompt": prompt, "raw": raw})
+        log_run(db, pid, "cad-builder", f"codegen.t{i + 1}", f"{brief[:200]} || {prompt[:1500]}", f"{note} || {code[:2000]}",
                 status="ok" if ok else "retry")
         if ok:
             p.stage = "cad"
             db.commit()
             return {"project_id": pid, "ok": True, "tries": i + 1,
                     "stl_file": str(stl_path), "py_file": str(py_path),
-                    "note": note, "attempts": attempts, "code": code}
+                    "note": note, "attempts": attempts, "code": code,
+                    "system": CODEGEN_SYSTEM}
         last_err = note
     return {"project_id": pid, "ok": False, "tries": 3, "attempts": attempts,
-            "code": code, "hint": "Inspect last error — often missing `result` or cadquery not installed."}
+            "code": code, "system": CODEGEN_SYSTEM,
+            "hint": "Inspect last error — often missing `result` or cadquery not installed."}
