@@ -1,3 +1,5 @@
+import os
+os.environ["LLM_PROVIDER"] = "stub"  # hermetic tests: never spend real LLM calls
 from fastapi.testclient import TestClient
 from app.main import app
 
@@ -43,3 +45,20 @@ def test_full_run_skip_research():
     body = r.json()
     assert "research" in body and "spec" in body and "safety" in body and "codegen" in body
     assert body["stage"] in ("print", "cad", "design")
+
+
+def test_full_run_async_job():
+    import time
+    p = client.post("/api/projects", json={"title": "async test", "problem": "grip"}).json()
+    r = client.post("/api/agent/full-run-async", json={"project_id": p["id"], "brief": "grip block", "skip_research": True, "max_codegen_tries": 1})
+    assert r.status_code == 200
+    jid = r.json()["job_id"]
+    # poll until done (stub LLM + local build are fast)
+    for _ in range(30):
+        j = client.get(f"/api/agent/jobs/{jid}").json()
+        if j["status"] in ("done", "error"):
+            break
+        time.sleep(1)
+    assert j["status"] == "done", j
+    assert j["result"]["stage"] in ("print", "cad", "design")
+    assert set(j["steps"]) == {"research", "spec", "safety", "codegen", "print"}

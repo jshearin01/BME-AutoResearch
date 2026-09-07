@@ -70,6 +70,8 @@ export default function App() {
   const [brief, setBrief] = useState('')
   const [provider, setProvider] = useState('…')
   const [inspect, setInspect] = useState(null)
+  const [job, setJob] = useState(null)
+  const [jobSecs, setJobSecs] = useState(0)
 
   const refresh = async () => {
     const p = await api.listProjects()
@@ -104,17 +106,37 @@ export default function App() {
 
   const fullRun = async () => {
     if (!active || busy) return
-    setBusy(true); setBusyStep('full')
-    setOut(prev => ({ ...prev, fullrun: { status: 'running' } }))
+    setBusy(true); setBusyStep('full'); setJobSecs(0)
+    // Non-blocking job: poll for live per-step progress.
     try {
-      const r = await api.fullRun({ project_id: active.id, brief, skip_research: false })
-      if (r.codegen && r.codegen.stl_file) setStlPath(r.codegen.stl_file)
-      setOut(prev => ({ ...prev, fullrun: r }))
-      await refresh(); await loadRuns(active.id); await loadCad(active.id)
+      const { job_id } = await api.fullRunAsync({ project_id: active.id, brief, skip_research: false })
+      const t0 = Date.now()
+      const timer = setInterval(async () => {
+        setJobSecs(Math.floor((Date.now() - t0) / 1000))
+        try {
+          const j = await api.getJob(job_id)
+          setJob(j)
+          if (j.status === 'done' || j.status === 'error') {
+            clearInterval(timer)
+            if (j.status === 'done' && j.result) {
+              if (j.result.codegen && j.result.codegen.stl_file) setStlPath(j.result.codegen.stl_file)
+              setOut(prev => ({ ...prev, fullrun: j.result }))
+            } else {
+              setOut(prev => ({ ...prev, fullrun: { error: j.error || 'job failed' } }))
+            }
+            await refresh(); await loadRuns(active.id); await loadCad(active.id)
+            setBusy(false); setBusyStep(null)
+          }
+        } catch (e) {
+          clearInterval(timer)
+          setOut(prev => ({ ...prev, fullrun: { error: String(e?.response?.data?.detail || e?.message || e) } }))
+          setBusy(false); setBusyStep(null)
+        }
+      }, 1500)
     } catch (e) {
       setOut(prev => ({ ...prev, fullrun: { error: String(e?.response?.data?.detail || e?.message || e) } }))
+      setBusy(false); setBusyStep(null)
     }
-    setBusy(false); setBusyStep(null)
   }
 
   const openRun = async (id) => {
@@ -158,6 +180,29 @@ export default function App() {
   }, [active?.stage])
 
   const safetyBlocked = safety && (safety.verdict || '').startsWith('BLOCKED')
+
+  const JOB_STEPS = [
+    { id: 'research', label: 'Evidence' },
+    { id: 'spec', label: 'Design spec' },
+    { id: 'safety', label: 'Safety' },
+    { id: 'codegen', label: 'CAD build' },
+    { id: 'print', label: 'Validate + packet' },
+  ]
+
+  const nextUp = () => {
+    if (!active) return null
+    switch (active.stage) {
+      case 'problem': return { t: 'Gather evidence first', d: 'Search papers and local knowledge, then synthesize gaps and design implications.', btn: 'Run evidence', fn: () => runStep('research', () => api.research({ project_id: active.id, query: `${active.title} ${active.problem}` }), 'research') }
+      case 'evidence': return { t: 'Draft the design spec', d: 'Turn evidence into scored concepts and one concrete spec for you to review.', btn: 'Run spec', fn: () => runStep('spec', () => api.makeSpec({ project_id: active.id }), 'spec') }
+      case 'design': return { t: 'Clear the safety gate', d: 'Flag risks and biocompat concerns before any CAD is generated.', btn: 'Run safety', fn: () => runStep('safety', () => api.safetyCheck({ project_id: active.id, title: active.title, problem: active.problem, spec: active.spec_json }), 'safety') }
+      case 'cad': return stlPath
+        ? { t: 'Validate the mesh', d: 'Check watertightness, then build the print packet.', btn: 'Validate STL', fn: () => runStep('validate', () => api.validateStl({ stl_file: stlPath }), 'validate') }
+        : { t: 'Generate the CAD model', d: 'AI writes parametric CadQuery and retries until an STL exports.', btn: 'AI generate', fn: () => runStep('codegen', () => api.codegenCad({ project_id: active.id, brief }), 'codegen') }
+      case 'print': return { t: 'Ready to print', d: 'Download the STL or slice directly if Orca/Prusa is installed.', btn: 'Build packet', fn: () => runStep('packet', () => api.printPacket({ project_id: active.id, stl_file: stlPath }), 'packet') }
+      default: return { t: 'Done', d: 'Start a new need or iterate on this one.', btn: null, fn: null }
+    }
+  }
+  const nu = nextUp()
 
   return (
     <>
@@ -223,7 +268,49 @@ export default function App() {
                 <span className={`pill ${active.stage}`}>{active.stage}</span>
               </div>
               <div className="mt">{stepper}</div>
-              {busyStep === 'full' && <div className="progress"><div /></div>}
+              {nu && !busy && (
+                <div className="nextup">
+                  <div className="grow"><div className="t">Next: {nu.t}</div><div className="d">{nu.d}</div></div>
+                  {nu.btn && <button className="btn primary" onClick={nu.fn}>{nu.btn}</button>}
+                  <button className="btn run" onClick={fullRun}>Full run</button>
+                </div>
+              )}
+              {job && (job.status === 'running' || job.status === 'queued') && (
+                <div className="liverun">
+                  <div className="row" style={{ justifyContent: 'space-between' }}>
+                    <b>Full run in progress — {jobSecs}s</b>
+                    <span className="mono">live: {job.current || 'starting'} · LLM calls can take a minute each</span>
+                  </div>
+                  <div className="jobsteps">
+                    {JOB_STEPS.map(s => {
+                      const st = job.steps?.[s.id] || { status: 'pending', detail: '' }
+                      return (
+                        <div key={s.id} className={`jobstep ${st.status}`}>
+                          <span className="jdot" />
+                          <span className="jl">{s.label}</span>
+                          <span className="jd">{st.status === 'running' ? (st.detail || 'working…') : st.status === 'done' ? st.detail : st.status}</span>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+              {job && job.status === 'done' && (
+                <div className="liverun done">
+                  <div className="row" style={{ justifyContent: 'space-between' }}>
+                    <b>Run finished → stage {job.result?.stage || '?'}{job.result?.codegen?.stl_file ? ' · STL built' : ''}{job.result?.safety?.verdict ? ` · safety: ${job.result.safety.verdict}` : ''}</b>
+                    <button className="btn small ghost btn" onClick={() => setJob(null)}>Dismiss</button>
+                  </div>
+                </div>
+              )}
+              {job && job.status === 'error' && (
+                <div className="liverun err">
+                  <div className="row" style={{ justifyContent: 'space-between' }}>
+                    <b>Run failed: {excerpt(job.error, 200)}</b>
+                    <button className="btn small ghost btn" onClick={() => setJob(null)}>Dismiss</button>
+                  </div>
+                </div>
+              )}
 
               <div className="steps">
                 <section className={`stepcard ${research && !research.error ? 'done' : ''}`}>
@@ -292,8 +379,8 @@ export default function App() {
                     <div className="num">4</div>
                     <div className="grow"><div className="title">CAD → STL</div><div className="desc">LLM CadQuery codegen with 3× auto-fix, min wall 2mm</div></div>
                     <Status value={busyStep === 'codegen' ? 'busy' : stlPath ? 'ok' : 'idle'} />
-                    <button className="btn small" disabled={busy} onClick={() => runStep('codegen', () => api.genCad({ project_id: active.id }), 'cad')}>Template</button>
-                    <button className="btn small primary btn" disabled={busy} onClick={() => runStep('codegen', () => api.codegenCad({ project_id: active.id, brief }), 'codegen')}>Generate</button>
+                    <button className="btn small" disabled={busy} onClick={() => runStep('codegen', () => api.genCad({ project_id: active.id }), 'cad')}>Starter template</button>
+                    <button className="btn small primary btn" disabled={busy} onClick={() => runStep('codegen', () => api.codegenCad({ project_id: active.id, brief }), 'codegen')}>AI generate</button>
                   </div>
                   <div className="body">
                     <input className="input" placeholder="Optional brief override — else uses project spec" value={brief} onChange={e => setBrief(e.target.value)} />
