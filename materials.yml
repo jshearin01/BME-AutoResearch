@@ -1,0 +1,17 @@
+# Curated FDM materials for skin-contact-adjacent prototypes (not implants)
+PLA:
+  bed_C: 60
+  nozzle_C: 210
+  notes: Easy print, brittle, deforms >50C. Wipe-clean only.
+  min_wall_mm: 1.2
+PETG:
+  bed_C: 80
+  nozzle_C: 240
+  notes: Tougher than PLA, better for grip aids. Stringing — dry filament.
+  min_wall_mm: 1.2
+TPU_95A:
+  bed_C: 50
+  nozzle_C: 225
+  notes: Flexible grips/splints. Slow print, direct-drive preferred.
+  min_wall_mm: 1.6
+# No ASA/ABS by default (fumes). No resin-implant claims without review.

@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+node_modules/
+dist/
+data/*.db
+data/*.log
+.env
+.DS_Store
+*.stl
+*.3mf
+*.gcode

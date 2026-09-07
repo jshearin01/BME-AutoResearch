@@ -1,0 +1,1 @@
+{"name": "generic-petg-fdm", "slicer": "OrcaSlicer", "material": "PETG", "layer_mm": 0.2, "walls": 3, "top_bottom_layers": 4, "infill": "20% gyroid", "support": "none (orient flat)", "brim": "auto for small footprint", "note": "FOSS baseline. Tune temp for your filament lot."}
