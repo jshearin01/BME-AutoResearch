@@ -43,7 +43,7 @@ async def _anthropic(prompt: str, system: str, max_tokens: int) -> str:
         r = await c.post(
             "https://api.anthropic.com/v1/messages",
             headers={"x-api-key": settings.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01"},
-            json={"model": "claude-sonnet-4-5", "max_tokens": max_tokens,
+            json={"model": settings.ANTHROPIC_MODEL, "max_tokens": max_tokens,
                   "system": system, "messages": [{"role": "user", "content": prompt}]},
         )
         r.raise_for_status()
@@ -51,11 +51,12 @@ async def _anthropic(prompt: str, system: str, max_tokens: int) -> str:
 
 
 async def _openai(prompt: str, system: str, max_tokens: int) -> str:
+    base = settings.OPENAI_BASE_URL.rstrip("/")
     async with httpx.AsyncClient(timeout=60) as c:
         r = await c.post(
-            "https://api.openai.com/v1/chat/completions",
+            f"{base}/chat/completions",
             headers={"Authorization": f"Bearer {settings.OPENAI_API_KEY}"},
-            json={"model": "gpt-4o-mini",
+            json={"model": settings.OPENAI_MODEL,
                   "messages": [{"role": "system", "content": system},
                                {"role": "user", "content": prompt}],
                   "max_tokens": max_tokens},

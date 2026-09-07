@@ -76,10 +76,61 @@ def try_build_stl(code: str, out_path: pathlib.Path):
 @router.get("/download")
 def download(path: str):
     p = pathlib.Path(path)
-    if not p.is_file() or CAD_DIR not in p.resolve().parents:
+    try:
+        resolved = p.resolve()
+        cad_resolved = CAD_DIR.resolve()
+    except Exception:
         from fastapi import HTTPException
         raise HTTPException(404, "file not found")
-    return FileResponse(str(p))
+    if not resolved.is_file() or cad_resolved not in resolved.parents:
+        # also allow bare filename
+        alt = (CAD_DIR / p.name).resolve()
+        if not alt.is_file():
+            from fastapi import HTTPException
+            raise HTTPException(404, "file not found")
+        resolved = alt
+    return FileResponse(str(resolved))
+
+
+@router.get("/files")
+def list_files(project_id: str | None = None):
+    files = sorted(CAD_DIR.glob("*.stl" if False else "*.*"))
+    out = []
+    for f in files:
+        if project_id and not f.name.startswith(project_id):
+            continue
+        if f.suffix not in (".stl", ".py", ".3mf"):
+            continue
+        out.append({"name": f.name, "path": str(f),
+                    "bytes": f.stat().st_size,
+                    "mtime": f.stat().st_mtime})
+    return {"cad_dir": str(CAD_DIR), "files": sorted(out, key=lambda x: x["mtime"], reverse=True)[:100]}
+
+
+@router.post("/validate")
+def validate_stl(body: dict):
+    path = body.get("stl_file", "")
+    p = pathlib.Path(path)
+    if not p.is_file():
+        alt = CAD_DIR / pathlib.Path(path).name
+        p = alt
+    if not p.is_file():
+        from fastapi import HTTPException
+        raise HTTPException(404, f"STL not found: {path}")
+    try:
+        import trimesh
+        m = trimesh.load(str(p))
+        bbox = m.bounds.tolist() if hasattr(m, "bounds") else None
+        return {"file": str(p), "watertight": bool(m.is_watertight),
+                "volume_mm3": float(m.volume) if m.is_volume else None,
+                "faces": int(len(m.faces)), "bbox_mm": bbox,
+                "pass": bool(m.is_watertight),
+                "checks": ["watertight", "min-wall>=1.2mm (verify in CAD params)",
+                           "max-envelope<=printer bed (verify vs profile)"]}
+    except ImportError:
+        return {"file": str(p), "note": "trimesh not installed — install to validate"}
+    except Exception as e:
+        return {"file": str(p), "pass": False, "error": str(e)}
 
 
 DEFAULT_CODE = '''"""Parametric pill-cap grip aid (FDM, min wall 2mm). `result` is exported."""

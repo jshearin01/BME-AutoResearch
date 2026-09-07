@@ -23,6 +23,8 @@ for r in (projects_router, research_router, design_router, cad_router,
           safety_router, printing_router, runs_router, agent_router):
     app.include_router(r)
 
+init_db()
+
 
 @app.on_event("startup")
 def startup():

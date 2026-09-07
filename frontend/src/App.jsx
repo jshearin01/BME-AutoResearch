@@ -11,6 +11,8 @@ export default function App() {
   const [runs, setRuns] = useState([])
   const [form, setForm] = useState({ title: '', problem: '', users: '', constraints: '' })
   const [busy, setBusy] = useState(false)
+  const [stlPath, setStlPath] = useState(null)
+  const [cadFiles, setCadFiles] = useState([])
 
   const refresh = async () => {
     const p = await api.listProjects()
@@ -21,6 +23,9 @@ export default function App() {
   useEffect(() => { refresh().catch(e => setOut({ error: String(e) })) }, [])
 
   const loadRuns = async (pid) => setRuns(await api.listRuns(pid).catch(() => []))
+  const loadCad = async (pid) => {
+    try { const r = await api.listCad(pid); setCadFiles(r.files || []) } catch {}
+  }
 
   const step = async (fn, key) => {
     if (!active) return
@@ -28,7 +33,8 @@ export default function App() {
     try {
       const r = await fn()
       setOut({ [key]: r })
-      await refresh(); await loadRuns(active.id)
+      if (key === 'cad' && r.stl_file) setStlPath(r.stl_file)
+      await refresh(); await loadRuns(active.id); await loadCad(active.id)
     } catch (e) { setOut({ [key]: { error: String(e?.response?.data?.detail || e) } }) }
     setBusy(false)
   }
@@ -40,7 +46,7 @@ export default function App() {
         <div style={{ background: '#0d141c', padding: 12, borderRadius: 8 }}>
           <h4>Projects</h4>
           {projects.map(p => (
-            <div key={p.id} onClick={() => { setActive(p); loadRuns(p.id) }}
+            <div key={p.id} onClick={() => { setActive(p); loadRuns(p.id); loadCad(p.id) }}
               style={{ padding: 8, marginBottom: 6, borderRadius: 6, cursor: 'pointer', background: active?.id === p.id ? '#16324a' : '#111c26' }}>
               <b>{p.title}</b><div style={{ fontSize: 11, color: '#8fa3b8' }}>{p.id} · {p.stage}</div>
             </div>
@@ -64,9 +70,13 @@ export default function App() {
               <button disabled={busy} onClick={() => step(() => api.makeSpec({ project_id: active.id }), 'spec')}>2. Design spec</button>
               <button disabled={busy} onClick={() => step(() => api.safetyCheck({ project_id: active.id, title: active.title, problem: active.problem, spec: active.spec_json }), 'safety')}>3. Safety check</button>
               <button disabled={busy} onClick={() => step(() => api.genCad({ project_id: active.id }), 'cad')}>4. Generate CAD</button>
-              <button disabled={busy} onClick={() => step(() => api.printPacket({ project_id: active.id, stl_file: out.cad?.stl_file }), 'packet')}>5. Print packet</button>
+              <button disabled={busy || !stlPath} onClick={() => step(() => api.validateStl({ stl_file: stlPath }), 'validate')}>Validate STL</button>
+              <button disabled={busy} onClick={() => step(() => api.printPacket({ project_id: active.id, stl_file: stlPath || out.cad?.stl_file }), 'packet')}>5. Print packet</button>
+              <button disabled={busy || !stlPath} onClick={() => step(() => api.sliceModel({ stl_file: stlPath }), 'slice')}>Slice (Orca/Prusa if installed)</button>
             </div>
-            <Viewer note={out.cad?.stl_note} />
+            <Viewer stlUrl={stlPath ? api.cadDownloadUrl(stlPath) : null} note={out.cad?.stl_note} />
+            {stlPath && <div style={{ fontSize: 12, margin: '6px 0' }}><a style={{ color: '#4cc3ff' }} href={api.cadDownloadUrl(stlPath)}>Download STL</a> <span style={{ color: '#8fa3b8' }}>{stlPath}</span></div>}
+            {cadFiles.length > 0 && <div style={{ fontSize: 12, marginBottom: 6 }}>Recent files: {cadFiles.slice(0, 5).map(f => <button key={f.path} style={{ marginRight: 4, fontSize: 11 }} onClick={() => f.name.endsWith('.stl') && setStlPath(f.path)}>{f.name}</button>)}</div>}
             <pre style={{ whiteSpace: 'pre-wrap', fontSize: 12, background: '#090f15', padding: 10, borderRadius: 6, maxHeight: 380, overflow: 'auto' }}>
               {JSON.stringify(out, null, 2)}
             </pre>

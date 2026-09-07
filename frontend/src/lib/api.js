@@ -7,7 +7,12 @@ export const research = (b) => api.post('/api/research/search', b).then(r => r.d
 export const makeSpec = (b) => api.post('/api/design/spec', b).then(r => r.data)
 export const safetyCheck = (b) => api.post('/api/safety/check', b).then(r => r.data)
 export const genCad = (b) => api.post('/api/cad/generate', b).then(r => r.data)
+export const listCad = (pid) => api.get('/api/cad/files', { params: { project_id: pid } }).then(r => r.data)
+export const validateStl = (b) => api.post('/api/cad/validate', b).then(r => r.data)
+export const cadDownloadUrl = (path) => `/api/cad/download?path=${encodeURIComponent(path)}`
 export const printPacket = (b) => api.post('/api/printing/packet', b).then(r => r.data)
+export const printProfiles = () => api.get('/api/printing/profiles').then(r => r.data)
+export const sliceModel = (b) => api.post('/api/printing/slice', b).then(r => r.data)
 export const agentRun = (b) => api.post('/api/agent/run', b).then(r => r.data)
 export const listRuns = (pid) => api.get('/api/runs', { params: { project_id: pid } }).then(r => r.data)
 export default api
