@@ -25,5 +25,6 @@ def init_db():
     # Import models so metadata registers
     from app.modules.projects.models import Project  # noqa: F401
     from app.modules.runs.models import RunLog  # noqa: F401
+    from app.modules.knowledge.models import KnowledgeChunk  # noqa: F401
 
     Base.metadata.create_all(bind=engine)

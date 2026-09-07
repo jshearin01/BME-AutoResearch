@@ -7,8 +7,14 @@ else writes .py + validation checklist. Never exec() untrusted imports blindly.
 import os
 import pathlib
 import datetime
-from fastapi import APIRouter
+import re
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
+from sqlalchemy.orm import Session
+from app.shared.db import get_db
+from app.shared.observability import log_run
+from app.shared.llm import generate
+from app.modules.projects.models import Project
 
 router = APIRouter(prefix="/api/cad", tags=["cad"])
 
@@ -140,3 +146,72 @@ outer = cq.Workplane("XY").box(length, width, height)
 inner = cq.Workplane("XY").box(length - wall*2, width - wall*2, height).translate((0, 0, wall))
 result = outer.cut(inner)
 '''
+
+CODEGEN_SYSTEM = (
+    "You generate parametric CadQuery 2.x Python for FDM 3D printing. "
+    "Output ONLY a python code block. Rules: `import cadquery as cq`, end with "
+    "`result = <solid>`, all dims in mm as top variables, min wall >= 2.0mm, "
+    "max envelope 100x100x60mm, no supports-friendly (flat base, chamfers ok), "
+    "no imports except cadquery/math. Research prototype only."
+)
+
+
+def _extract_code(text: str) -> str:
+    m = re.search(r"```python(.*?)```", text, re.S)
+    if m:
+        return m.group(1).strip()
+    m = re.search(r"```(.*?)```", text, re.S)
+    if m:
+        return m.group(1).strip()
+    return text.strip()
+
+
+@router.post("/codegen")
+async def codegen(body: dict, db: Session = Depends(get_db)):
+    """spec -> LLM CadQuery code -> build -> auto-fix up to 3 tries."""
+    pid = body.get("project_id", "")
+    p = db.get(Project, pid)
+    if not p:
+        raise HTTPException(404, "project not found")
+    brief = body.get("brief", "") or f"{p.title}: {p.problem} | constraints: {p.constraints} | spec: {p.spec_json[:1500]}"
+    try:
+        from app.modules.knowledge.router import retrieve
+        kb = retrieve(db, brief, 3)
+    except Exception:
+        kb = ""
+    attempts: list[dict] = []
+    code = ""
+    last_err = ""
+    for i in range(3):
+        prompt = (f"DESIGN BRIEF: {brief}\nKNOWLEDGE: {kb[:1500]}\n"
+                  + (f"PREVIOUS CODE FAILED with: {last_err}\nPrevious code:\n{code[:2500]}\nFix it. "
+                     if last_err else "Generate the part. ")
+                  + "Reply with one ```python block only.")
+        raw = await generate(prompt, system=CODEGEN_SYSTEM, max_tokens=2000)
+        code = _extract_code(raw)
+        issues = validate_code(code)
+        blocked = [x for x in issues if x.startswith("blocked")]
+        if blocked:
+            last_err = "; ".join(blocked)
+            attempts.append({"try": i + 1, "ok": False, "error": last_err, "code": code[:2000]})
+            continue
+        stamp = datetime.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        py_path = CAD_DIR / f"{pid}_gen_{stamp}_t{i}.py"
+        py_path.write_text(code)
+        stl_path = CAD_DIR / f"{pid}_gen_{stamp}_t{i}.stl"
+        ok, note = try_build_stl(code, stl_path)
+        attempts.append({"try": i + 1, "ok": ok, "note": note,
+                         "py_file": str(py_path),
+                         "stl_file": str(stl_path) if ok else None,
+                         "code": code[:3000]})
+        log_run(db, pid, "cad-builder", f"codegen.t{i + 1}", brief[:300], note[:500],
+                status="ok" if ok else "retry")
+        if ok:
+            p.stage = "cad"
+            db.commit()
+            return {"project_id": pid, "ok": True, "tries": i + 1,
+                    "stl_file": str(stl_path), "py_file": str(py_path),
+                    "note": note, "attempts": attempts, "code": code}
+        last_err = note
+    return {"project_id": pid, "ok": False, "tries": 3, "attempts": attempts,
+            "code": code, "hint": "Inspect last error — often missing `result` or cadquery not installed."}
