@@ -68,6 +68,18 @@ export default function App() {
             <h3>{active.title}</h3>
             <p style={{ fontSize: 13, color: '#b8c7d6' }}>{active.problem}</p>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
+              <button disabled={busy} style={{ background: '#1d5c38', color: '#fff', fontWeight: 700 }} onClick={async () => {
+                if (!active) return
+                setBusy(true)
+                try {
+                  setOut({ fullrun: { status: 'running — research → spec → safety → codegen → validate…' } })
+                  const r = await api.fullRun({ project_id: active.id, brief, skip_research: false })
+                  if (r.codegen?.stl_file) setStlPath(r.codegen.stl_file)
+                  setOut({ fullrun: r })
+                  await refresh(); await loadRuns(active.id); await loadCad(active.id)
+                } catch (e) { setOut({ fullrun: { error: String(e?.response?.data?.detail || e) } }) }
+                setBusy(false)
+              }}>▶ Full run</button>
               <button disabled={busy} onClick={() => step(() => api.research({ project_id: active.id, query: active.title + ' ' + active.problem }), 'research')}>1. Research</button>
               <button disabled={busy} onClick={() => step(() => api.makeSpec({ project_id: active.id }), 'spec')}>2. Design spec</button>
               <button disabled={busy} onClick={() => step(() => api.safetyCheck({ project_id: active.id, title: active.title, problem: active.problem, spec: active.spec_json }), 'safety')}>3. Safety check</button>

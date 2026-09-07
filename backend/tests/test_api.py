@@ -34,3 +34,12 @@ def test_cad_codegen_stub():
     assert r.status_code == 200
     body = r.json()
     assert "attempts" in body and len(body["attempts"]) >= 1
+
+
+def test_full_run_skip_research():
+    p = client.post("/api/projects", json={"title": "fullrun test", "problem": "one-hand opener"}).json()
+    r = client.post("/api/agent/full-run", json={"project_id": p["id"], "brief": "grip block", "skip_research": True, "max_codegen_tries": 1})
+    assert r.status_code == 200
+    body = r.json()
+    assert "research" in body and "spec" in body and "safety" in body and "codegen" in body
+    assert body["stage"] in ("print", "cad", "design")
